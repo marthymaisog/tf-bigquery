@@ -1,102 +1,198 @@
-# 🎮 Game Analytics Pipeline - Terraform Infrastructure
+# 🎮 Game Analytics Infrastructure & Data Pipeline
 
-This repository contains the Infrastructure as Code (IaC) configuration for deploying a serverless and containerized game analytics data pipeline on Google Cloud Platform (GCP). 
-
-The architecture provisions a secure data ingestion and processing environment utilizing **BigQuery**, **Cloud Storage**, **GKE (Apache Airflow)**, and custom **VPC Networking**.
+A complete, production-grade end-to-end Data Platform for Game Analytics. This repository provisions the cloud infrastructure, deploys a real-time serverless ingestion API, orchestrates scheduled data cleaning pipelines, and feeds analytical datasets into BigQuery for visual reporting in Looker Studio.
 
 ---
 
-## 🏗️ Architecture Components
+## 🏗️ Architecture Overview
 
-* **BigQuery (`bigquery.tf`)**: Creates a game analytics dataset, a time-partitioned/clustered raw events table (`game_events_raw`), and a processed events table (`game_events_transformed`).
-* **Cloud Storage (`cloud_storage.tf`)**: Provisions a raw event storage bucket with uniform bucket-level access, object versioning, and a 90-day deletion lifecycle rule.
-* **Networking (`networking.tf`)**: Sets up a dedicated custom VPC (`main_vpc`), a private subnet (`airflow_subnet`) with private Google access, and ingress/egress firewall rules.
-* **Compute / GKE (`composer.tf`)**: Provisions a Google Kubernetes Engine (GKE) cluster (`airflow_cluster`) and deploys Apache Airflow using a Kubernetes StatefulSet (`kubernetes_stateful_set_v1`).
-* **IAM & Security (`iam.tf`)**: Establishes a least-privilege Airflow service account (`airflow_sa`), grants read-only BigQuery permissions, and sets up a project audit logging bucket (`airflow_audit`).
-* **Drift Detection (`drift_detection.sh`)**: A utility script to verify state consistency, check resource deployment, and flag any configuration drift.
+```text
+               +-----------------------+
+               |  Game Clients         |
+               |  (Unity / Unreal)     |
+               +-----------+-----------+
+                           |
+                           | HTTPS POST (JSON Telemetry)
+                           v
+               +-----------------------+
+               | Ingestion API         |
+               | (FastAPI on Cloud Run)|
+               +-----------+-----------+
+                           |
+                           | Writes raw JSON batches
+                           v
+               +-----------------------+
+               | Cloud Storage (GCS)   |
+               |  gs://raw/YYYY-MM-DD/ |
+               +-----------+-----------+
+                           |
+                           | Triggered daily / scheduled
+                           v
+               +-----------------------+
+               | Airflow Orchestrator  |
+               | (Composer / GKE)      |
+               +-----------+-----------+
+                           |
+                           | Extracts, cleans, and loads
+                           v
+               +-----------------------+
+               | BigQuery Warehouse    |
+               | (game_events_clean)   |
+               +-----------+-----------+
+                           |
+                           | Queries & Dashboards
+                           v
+               +-----------------------+
+               | BI Dashboard          |
+               | (Looker Studio)       |
+               +-----------------------+
+```
 
 ---
 
-## 📂 Repository Structure
+## 🛠️ Tech Stack
+
+* **Infrastructure as Code (IaC):** Terraform (v1.4.0)
+* **Cloud Platform:** Google Cloud Platform (GCP)
+* **Ingestion Layer:** Serverless FastAPI application deployed on **Google Cloud Run**
+* **Data Lake:** **Google Cloud Storage (GCS)** partitioned by date (`raw/YYYY-MM-DD/`)
+* **Data Warehouse:** **Google BigQuery** (Partitioned & Clustered tables)
+* **Orchestration:** **Apache Airflow** running on Google Kubernetes Engine (**GKE / Cloud Composer**)
+* **Data Transformation:** SQL / PySpark / dbt compatible
+* **Business Intelligence:** **Looker Studio** for live interactive dashboards
+* **Continuous Integration & Deployment (CI/CD):** **GitHub Actions** with automated Terraform validation, plan review, and drift detection
+
+---
+
+## 📁 Repository Structure
 
 ```text
 .
-├── bigquery.tf           # BigQuery dataset and table schemas
-├── cloud_storage.tf      # GCS raw event bucket, lifecycle rules, and IAM bindings
-├── composer.tf           # GKE cluster configuration and Airflow StatefulSet deployment
-├── data.tf               # GCP data sources (buckets, datasets, service account keys)
-├── drift_detection.sh    # Script to check infrastructure state and configuration drift
-├── iam.tf                # Airflow service account, dataset IAM, and logging buckets
-├── main.tf               # Terraform provider setup (Google & Kubernetes) and local backend
-├── networking.tf         # VPC, private subnets, and firewall configurations
-├── output.tf             # Terraform deployment output variables
-└── variables.tf          # Global input variables (project ID, region, environment, etc.)
+├── .github/
+│   └── workflows/
+│       └── ci-cd.yml             # GitHub Actions automation pipeline
+├── terraform/
+│   ├── provider.tf               # GCP Provider configuration
+│   ├── cloud_storage.tf          # GCS raw telemetry bucket provisioning
+│   ├── bigquery.tf               # BigQuery dataset & table definitions
+│   ├── composer.tf               # GKE Cluster & Airflow deployment
+│   ├── iam.tf                    # IAM roles & service account permissions
+│   └── networking.tf             # VPC, subnets, & firewall rules
+├── ingestion_api/
+│   ├── main.py                   # FastAPI application receiving game events
+│   ├── requirements.txt          # Python dependencies
+│   └── Dockerfile                # Containerization specification
+├── dags/
+│   └── game_events_pipeline.py   # Airflow DAG for GCS to BigQuery ETL
+└── README.md                     # Project documentation
 ```
 
 ---
 
-## 🚀 Getting Started
+## 🚀 System Components & Workflow
+
+### 1. Infrastructure as Code (`/terraform`)
+Terraform manages the full cloud environment declaratively.
+* **Storage:** Provisions `mygame-raw-events-bucket` to hold raw JSON payloads from game sessions.
+* **Compute:** Configures a GKE cluster running Apache Airflow for data workflow orchestration.
+* **Data Warehouse:** Pre-creates the `game_analytics` BigQuery dataset and target analytical tables.
+
+### 2. Ingestion Microservice (`/ingestion_api`)
+A serverless REST API built with **FastAPI** running on **Google Cloud Run**.
+* Game engines (Unity/Unreal) push event logs over HTTPS to `/v1/telemetry`.
+* Validates schema attributes (`player_id`, `event_name`, `event_timestamp`, etc.).
+* Generates unique identifiers and streams data into GCS bucket paths (`raw/YYYY-MM-DD/`).
+
+### 3. Workflow Orchestration (`/dags`)
+An Apache Airflow DAG (`game_events_pipeline.py`) runs on GKE to process raw logs.
+* **Extraction:** Reads unprocessed daily files from Cloud Storage.
+* **Transformation & Loading:** Cleans timestamp formatting, handles null values, deduplicates records, and loads clean records into BigQuery target tables.
+
+### 4. Continuous Integration & Deployment (`.github/workflows`)
+Automated pipelines ensure code quality and prevent unauthorized drift.
+* **Trigger:** Direct pushes or Pull Requests targeting the `main` branch.
+* **Terraform Validation:** Verifies syntax correctness and state synchronization against remote Google Cloud Storage backends.
+* **Plan & Review:** Generates execution plan output (`plan.out`) using GCP service account credentials.
+* **Drift Detection:** Identifies manual modifications made directly in the Google Cloud Console to ensure strict IaC compliance.
+
+### 5. BI Dashboards & Visualization (Looker Studio)
+Connects directly to BigQuery `game_events_transformed` tables for real-time reporting:
+* **Key Metrics:** Daily Active Users (DAU), Player Retention, Session Duration, and In-Game Item Purchases.
+* **Interactivity:** Time-range selectors, event filters, and region breakdowns for game designers and live-ops managers.
+
+---
+
+## ⚡ Deployment & Getting Started
 
 ### Prerequisites
-Make sure you have the following tools installed and configured:
-* [Terraform](https://www.developer.hashicorp.com/terraform/downloads) (~> 5.0 provider compatibility)
-* [Google Cloud CLI (`gcloud`)](https://cloud.google.com/sdk/docs/install)
-* Authenticated GCP credentials (`gcloud auth application-default login`)
+* [Google Cloud SDK (`gcloud`)](https://cloud.google.com/sdk/docs/install) installed and authenticated.
+* [Terraform v1.4.0+](https://developer.hashicorp.com/terraform/downloads) installed locally.
+* A GCP Project with billing enabled.
 
-### 1. Configure Variables
-Create a `terraform.tfvars` file in the root directory and supply your project-specific values:
+---
 
-```hcl
-project_id                  = "your-gcp-project-id"
-region                      = "us-central1"
-zone                        = "us-central1-a"
-environment                 = "dev"
-service_account_name        = "sa"
-cloud_storage_bucket_prefix = "mygame"
-bigquery_dataset_id         = "game_analytics"
-```
+### Step 1: Provision Infrastructure with Terraform
 
-### 2. Initialize Terraform
-Initialize the working directory to download required providers (Google and Kubernetes):
 ```bash
-terraform init
-```
+cd terraform
 
-### 3. Validate Configuration
-Ensure your configuration is syntactically valid:
-```bash
+# Initialize Terraform with remote backend
+terraform init \
+  -backend-config="bucket=tf-bigquery-state-bucket" \
+  -backend-config="prefix=tf_bigquery_state" \
+  -backend-config="region=us-central1"
+
+# Validate configuration
 terraform validate
-```
 
-### 4. Preview Changes
-Review the execution plan to see what resources will be created:
-```bash
+# Review plan
 terraform plan
-```
 
-### 5. Apply Configuration
-Deploy the infrastructure to GCP:
-```bash
-terraform apply
+# Apply infrastructure changes
+terraform apply -auto-approve
 ```
 
 ---
 
-## 🔍 Drift Detection
-
-To verify that your live cloud infrastructure matches your Terraform state without unexpected manual modifications, run the provided drift detection script:
+### Step 2: Deploy the Ingestion Microservice to Cloud Run
 
 ```bash
-chmod +x drift_detection.sh
-./drift_detection.sh
+cd ../ingestion_api
+
+# Deploy container directly from source to Cloud Run
+gcloud run deploy game-ingestion-api \
+  --source . \
+  --platform managed \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --set-env-vars BUCKET_NAME=mygame-raw-events-bucket
 ```
-The script will review current state bindings, execute a detailed infrastructure plan, check expected IAM roles, and save a summary report to `drift_report.txt`.
+*Note: Copy the service URL output by `gcloud` (e.g., `https://game-ingestion-api-xyz-uc.a.run.app/v1/telemetry`) to configure your game clients.*
 
 ---
 
-## 📊 Outputs
-Once applied, Terraform will export helpful resource references:
-* `service_account_email`: Email address of the Airflow service account.
-* `storage_bucket_name`: Name of the raw game events GCS bucket.
-* `bigquery_dataset_id`: ID of the BigQuery dataset.
-* `airflow_container_name`: Name of the GKE cluster running Airflow.
+### Step 3: Deploy Airflow DAGs
+
+Deploy the DAG python file into your Airflow DAGs folder (or GCS DAGs bucket managed by Composer):
+
+```bash
+gsutil cp ../dags/game_events_pipeline.py gs://<YOUR_COMPOSER_DAGS_BUCKET>/dags/
+```
+
+---
+
+### Step 4: Connect Looker Studio
+
+1. Open [Looker Studio](https://lookerstudio.google.com).
+2. Create a **New Blank Report**.
+3. Select the **BigQuery** connector.
+4. Choose your GCP Project -> `game_analytics` Dataset -> `game_events_transformed` Table.
+5. Click **Add to Report** to start building charts and visual KPI scorecards.
+
+---
+
+## 🔒 Security Best Practices
+
+* **No Hardcoded Credentials:** Game clients only interact with the public Cloud Run endpoint; direct GCS bucket access keys are never exposed.
+* **IAM Least Privilege:** Dedicated GCP Service Accounts are used for Cloud Run writes and Airflow/BigQuery read-write execution.
+* **Automated Auditing:** GitHub Actions runs drift detection checks to keep live cloud infrastructure 100% aligned with git commits.
