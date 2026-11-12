@@ -1,8 +1,10 @@
 import os
 import json
+import time
 import subprocess
 from google import genai
 from google.genai import types
+from google.genai.errors import ServerError
 
 def run_ai_code_reviewer():
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -52,14 +54,33 @@ def run_ai_code_reviewer():
     }}
     """
 
-    response = client.models.generate_content(
-        model='gemini-3.8-flash',
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            temperature=0.1
-        ),
-    )
+    # Retry loop for temporary 503 server overloads
+    max_retries = 3
+    retry_delay = 5
+    response = None
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            print(f"Sending request to Gemini (Attempt {attempt}/{max_retries})...")
+            response = client.models.generate_content(
+                model='gemini-3.8-flash',
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.1
+                ),
+            )
+            break
+        except ServerError as e:
+            if e.code == 503 and attempt < max_retries:
+                print(f"Model busy (503). Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+            else:
+                raise e
+
+    if not response:
+        raise RuntimeError("Failed to get response from Gemini after multiple retries.")
 
     result = json.loads(response.text)
     
