@@ -1,0 +1,48 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  terraform_validation:
+    name: Terraform Validate & Plan
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.4.0
+
+      - name: Initialize Terraform
+        run: |
+          terraform init -backend-config="bucket=tf-bigquery-state-bucket" \
+                     -backend-config="prefix=tf_bigquery_state" \
+                     -backend-config="region=us-central1"
+
+      - name: Validate Infrastructure
+        run: terraform validate
+
+      - name: Plan Infrastructure
+        id: plan
+        run: terraform plan -out=plan.out || exit 1
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_KEY }}
+
+      - name: Execute Plan Review
+        if: always()
+        run: echo "Terraform plan saved to plan.out for manual review"
+
+  drift_detection:
+    name: Drift Detection Check
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout
