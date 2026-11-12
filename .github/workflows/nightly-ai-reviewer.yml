@@ -1,0 +1,40 @@
+name: Overnight AI Security & Code Refinement Agent
+
+on:
+  schedule:
+    - cron: '0 2 * * *' # Runs every day at 2:00 AM UTC
+  workflow_dispatch: 
+
+jobs:
+  nightly-audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          pip install google-genai requests pyyaml
+
+      - name: Run Security Scan (Checkov IaC Scanner)
+        id: security_scan
+        uses: bridgecrewio/checkov-action@master
+        with:
+          framework: terraform
+          output_format: json
+          soft_fail: true # Allows the workflow to continue so the AI can read the report
+
+      - name: Run Autonomous AI Code Fixer Agent
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python scripts/ai_nightly_agent.py
