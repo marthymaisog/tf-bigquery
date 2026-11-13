@@ -1,6 +1,6 @@
 # 🎮 Secure & Scalable Game Telemetry Pipeline on GCP
 
-An end-to-end, cloud-native game telemetry data platform built on Google Cloud Platform (GCP). This project implements modern data engineering best practices, featuring Infrastructure as Code (IaC), a serverless edge ingestion layer protected by Google Cloud Armor, automated Airflow orchestration, and native BI visualization.
+An end-to-end, cloud-native game telemetry data platform built on Google Cloud Platform (GCP). This project implements modern data engineering best practices, featuring Infrastructure as Code (IaC), a serverless edge ingestion layer protected by Google Cloud Armor, automated CI/CD workflows, Airflow orchestration, and native BI visualization.
 
 ## 🏗️ Architecture & Data Flow
 
@@ -61,7 +61,7 @@ An end-to-end, cloud-native game telemetry data platform built on Google Cloud P
 
 ## 🛠️ Tech Stack
 
-* **Infrastructure as Code (IaC):** Terraform (>= 1.5.0)
+* **Infrastructure as Code (IaC):** Terraform (>= 1.5.0) with GCS remote state backend
 * **Cloud Platform:** Google Cloud Platform (GCP)
 * **Edge Security & Networking:** Google Cloud Armor, External HTTP(S) Load Balancer, Serverless NEG
 * **Ingestion Layer:** Serverless FastAPI + Pydantic deployed on **Google Cloud Run**
@@ -70,7 +70,7 @@ An end-to-end, cloud-native game telemetry data platform built on Google Cloud P
 * **Orchestration:** **Apache Airflow** running on Google Kubernetes Engine (**GKE / Cloud Composer**)
 * **Data Transformation:** SQL / PySpark / dbt compatible
 * **Business Intelligence:** **Looker Studio** for live interactive dashboards
-* **Continuous Integration & Deployment (CI/CD):** **GitHub Actions** with automated Terraform validation, plan review, and drift detection
+* **Continuous Integration & Deployment (CI/CD):** **GitHub Actions** (Terraform validation, drift detection, and automated Artifact Registry/Cloud Run deployments)
 
 ## 📁 Repository Structure
 
@@ -78,9 +78,10 @@ An end-to-end, cloud-native game telemetry data platform built on Google Cloud P
 my-game-analytics-repo/
 ├── .github/
 │   └── workflows/
-│       └── ci-cd.yml             # GitHub Actions automation pipeline
+│       ├── terraform.yml         # Terraform validation, plan, apply & drift detection
+│       └── deploy_api.yml        # Automated Docker build & Cloud Run deployment
 ├── terraform/                    # Infrastructure as Code (Terraform)
-│   ├── main.tf                   # Provider configurations & backend setup
+│   ├── main.tf                   # Provider configurations & GCS remote backend setup
 │   ├── variables.tf              # Global input variables
 │   ├── outputs.tf                # Resource outputs (bucket names, service URLs)
 │   ├── cloud_storage.tf          # GCS raw data lake bucket provisioning
@@ -99,24 +100,42 @@ my-game-analytics-repo/
 └── README.md                     # Project documentation
 ```
 
-## ⚡ Getting Started & Deployment
+## 🔄 CI/CD Automation (GitHub Actions)
+
+The repository includes automated pipelines under `.github/workflows/` to enforce infrastructure governance and streamline microservice updates:
+
+* **Infrastructure CI/CD & Drift Detection (`terraform.yml`):**
+  * Automatically runs `terraform fmt`, `terraform validate`, and `terraform plan` against the GCS remote state bucket (`tf-bigquery-state-bucket`) on every pull request.
+  * Executes `terraform apply` upon merge to `main` and runs drift detection checks to ensure live cloud infrastructure matches repository definitions.
+* **Ingestion Service CI/CD (`deploy_api.yml`):**
+  * Triggers on changes to `ingestion_api/`.
+  * Builds the FastAPI Docker image, pushes it to **Google Artifact Registry**, and deploys the new revision to **Cloud Run** using keyless Workload Identity Federation (WIF).
+
+### Required GitHub Repository Secrets
+To enable the CI/CD workflows, configure the following secrets in **GitHub Settings $\rightarrow$ Secrets and variables $\rightarrow$ Actions**:
+* `GCP_PROJECT_ID`: Target Google Cloud Project ID.
+* `GCP_SERVICE_ACCOUNT`: CI/CD deployment service account email.
+* `GCP_WORKLOAD_IDENTITY_PROVIDER`: Workload Identity Federation provider resource path (or `GOOGLE_SERVICE_ACCOUNT_KEY` if using static JSON credentials).
+
+## ⚡ Getting Started & Manual Deployment
 
 ### Prerequisites
-
 * [Google Cloud SDK (`gcloud`)](https://cloud.google.com/sdk/docs/install) installed and authenticated (`gcloud auth login`).
 * [Terraform (>= 1.5.0)](https://developer.hashicorp.com/terraform/downloads) installed locally.
 * Docker installed for container builds.
 * A GCP Project with billing enabled.
 
 ### Step 1: Provision Infrastructure with Terraform
-
-Navigate to your Terraform directory, validate your configuration (including Cloud Armor and Load Balancer rules), and apply:
+Navigate to your Terraform directory, initialize the remote backend, validate your configuration, and apply:
 
 ```bash
 cd terraform
 
-# Initialize Terraform
-terraform init
+# Initialize Terraform with GCS backend
+terraform init \
+  -backend-config="bucket=tf-bigquery-state-bucket" \
+  -backend-config="prefix=tf_bigquery_state" \
+  -backend-config="region=us-central1"
 
 # Validate configuration
 terraform validate
@@ -127,8 +146,7 @@ terraform apply tfplan
 ```
 
 ### Step 2: Build & Deploy the Ingestion API to Cloud Run
-
-Build the container image and deploy the serverless API (configured to accept traffic via the Load Balancer):
+Build the container image and deploy the serverless API (configured to accept traffic exclusively via the Load Balancer):
 
 ```bash
 cd ../ingestion_api
@@ -145,7 +163,6 @@ gcloud run deploy game-ingestion-api \
 ```
 
 ### Step 3: Deploy Airflow DAGs
-
 Upload the DAG definition to your Composer/Airflow DAGs bucket:
 
 ```bash
@@ -153,7 +170,6 @@ gsutil cp ../dags/game_events_pipeline.py gs://<YOUR_COMPOSER_DAGS_BUCKET>/dags/
 ```
 
 ### Step 4: Connect Looker Studio for BI Dashboards
-
 1. Open [Looker Studio](https://lookerstudio.google.com).
 2. Create a new **Report** and select the **BigQuery** connector.
 3. Select your GCP Project, `game_analytics` Dataset, and transformed game metrics table.
@@ -163,5 +179,6 @@ gsutil cp ../dags/game_events_pipeline.py gs://<YOUR_COMPOSER_DAGS_BUCKET>/dags/
 
 * **Edge DDoS & Flood Protection:** Cloud Armor sits in front of the External Load Balancer, automatically throttling or blocking abusive IP addresses (`HTTP 429`) before requests reach compute containers.
 * **Network Isolation:** Cloud Run ingress is restricted to `INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER`, preventing malicious actors from bypassing Cloud Armor via the direct `.run.app` URL.
-* **No Hardcoded Credentials:** Game clients only interact with the public Load Balancer endpoint; direct GCS bucket access keys are never embedded in game builds.
-* **IAM Least Privilege:** Dedicated GCP Service Accounts govern Cloud Run writes and Airflow/BigQuery execution.
+* **Keyless CI/CD Authentication:** Uses GitHub Actions Workload Identity Federation (WIF) to authenticate to GCP without storing long-lived service account keys.
+* **No Hardcoded Client Credentials:** Game clients only interact with the public Load Balancer endpoint; direct GCS bucket access keys are never embedded in game builds.
+* **IAM Least Privilege:** Dedicated GCP Service Accounts govern Cloud Run writes, Terraform state management, and Airflow/BigQuery execution.
